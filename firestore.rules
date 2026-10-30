@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'ecomart2092@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Entity validation blueprints
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 50 &&
+             data.category is string && data.category.size() <= 80 &&
+             data.retailPrice is number && data.retailPrice >= 0 &&
+             data.stockQuantity is number && data.stockQuantity >= 0;
+    }
+
+    function isStockDecrementAction() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['stockQuantity', 'updatedAt']) &&
+             incoming().stockQuantity is number &&
+             incoming().stockQuantity >= 0;
+    }
+
+    function isValidOrder(data) {
+      return data.orderNumber is string && data.orderNumber.size() > 0 && data.orderNumber.size() <= 50 &&
+             data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 150 &&
+             data.customerPhone is string && data.customerPhone.size() > 0 && data.customerPhone.size() <= 25 &&
+             data.total is number && data.total >= 0 &&
+             data.items is list && data.items.size() > 0 && data.items.size() <= 100;
+    }
+
+    function isInvoiceIncrementAction() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['nextInvoiceNumber', 'updatedAt']) &&
+             incoming().nextInvoiceNumber is number;
+    }
+
+    function isValidSetting(data) {
+      return data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 150;
+    }
+
+    function isValidInventoryLog(data) {
+      return data.productId is string && data.productId.size() <= 128 &&
+             data.changeAmount is number &&
+             data.reason is string &&
+             data.previousStock is number &&
+             data.newStock is number;
+    }
+
+    function isValidCommission(data) {
+      return data.orderId is string && data.resellerId is string &&
+             data.amount is number && data.amount >= 0 &&
+             data.status in ['pending', 'approved', 'paid', 'reversed'];
+    }
+
+    function isValidPayoutRequest(data) {
+      return data.resellerId is string && data.amount is number && data.amount > 0 &&
+             data.status in ['pending', 'approved', 'paid', 'rejected'];
+    }
+
+    // 0. Test connection doc
+    match /test/{testId} {
+      allow read: if true;
+    }
+
+    // 1. Admins Collection
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && (isAdmin() || request.auth.uid == adminId);
+      allow write: if isBootstrappedAdmin();
+    }
+
+    // 2. Products Collection
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidProduct(incoming());
+      allow update: if (isAdmin() && isValidProduct(incoming())) || isStockDecrementAction();
+      allow delete: if isAdmin();
+    }
+
+    // 3. Orders Collection
+    match /orders/{orderId} {
+      allow create: if isValidOrder(incoming());
+      allow read: if isAdmin() || (
+        isSignedIn() && (
+          (resource.data.customerEmail is string && resource.data.customerEmail == request.auth.token.email) ||
+          (resource.data.resellerId is string && resource.data.resellerId == request.auth.uid) ||
+          (resource.data.retailerId is string && resource.data.retailerId == request.auth.uid)
+        )
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // 4. Inventory Logs Collection
+    match /inventory_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isValidInventoryLog(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    // 5. Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (request.auth.uid == userId && (!incoming().diff(existing()).affectedKeys().hasAny(['role', 'status'])))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 6. Commissions Collection
+    match /commissions/{commissionId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.resellerId == request.auth.uid);
+      allow create: if isValidCommission(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    // 7. Payout Requests Collection
+    match /payout_requests/{payoutId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.resellerId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().resellerId == request.auth.uid && isValidPayoutRequest(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    // 8. Settings Collection
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidSetting(incoming());
+      allow update: if (isAdmin() && isValidSetting(incoming())) || isInvoiceIncrementAction();
+      allow delete: if isAdmin();
+    }
+  }
+}

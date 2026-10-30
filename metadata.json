@@ -1,0 +1,6 @@
+{
+  "name": "ECOMART GIFTS PLACE - Admin & Store",
+  "description": "Premium gifting e-commerce platform with secure Admin Control Panel, Retailer & Reseller pricing tiers, direct photo upload, commission ledger, inventory management, GST invoicing, and WhatsApp order flow.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
